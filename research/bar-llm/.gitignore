@@ -1,0 +1,13 @@
+settings.env
+*.env
+.env*
+!.env.example
+!settings.env.example
+.venv/
+__pycache__/
+*.py[cod]
+bar_duel/runs/
+bar_duel/batches/
+bar_duel/reference/
+tmp*/
+*.log
