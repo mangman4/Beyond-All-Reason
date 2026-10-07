@@ -12,6 +12,10 @@ Build metal extractors and energy production, a factory, then an army. Adjust to
 resources and threats. Use idle builders and factories for useful work. Existing
 jobs continue: do not duplicate factories unnecessarily. Wait only when continuing
 existing work is preferable. Candidate descriptions explain what each action does.
+Vehicle and aircraft factories are different. Aircraft need an air factory.
+Use fighters against aircraft, bombers against ground targets, air scouts to explore,
+and anti-air defenses against visible aircraft. Ground orders exclude aircraft;
+air orders exclude ground troops and constructors. Balance cost and energy income.
 Reason codes: economy, energy, production, military, pressure, defense, scouting,
 repair, reclaim, wait. Do not output coordinates, orders, explanations or analysis.'''
 

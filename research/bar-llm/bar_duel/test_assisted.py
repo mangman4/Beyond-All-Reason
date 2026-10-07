@@ -6,6 +6,11 @@ import assisted
 import run
 
 class AssistedTests(unittest.TestCase):
+    def test_air_counts_and_threats_survive_compaction(self):
+        self.obs.update(force={'ground':4,'air':3,'fighters':1,'bombers':1,'air_scouts':1},threat={'visible_air':2,'visible_ground':1})
+        value=assisted.compact(self.obs)
+        self.assertEqual(value['force'],self.obs['force'])
+        self.assertEqual(value['threat'],self.obs['threat'])
     def setUp(self):
         self.obs={'control_mode':'assisted','frame':30,'resources':{'metal':100,'energy':500},
           'candidates':[{'id':'wait','description':'Keep orders'},{'id':'build_energy','description':'Build solar'}],

@@ -21,7 +21,7 @@ INSTRUCTIONS = {
 def owner(action):
     if action.startswith('direct_'):return action.removeprefix('direct_')
     if action in ('expand_metal','build_energy') or action.startswith('reclaim_'):return 'economy'
-    if action=='build_factory' or action.startswith('produce_'):return 'production'
+    if action in ('build_factory','build_air_factory') or action.startswith('produce_'):return 'production'
     if action!='wait':return 'combat'
     return None
 

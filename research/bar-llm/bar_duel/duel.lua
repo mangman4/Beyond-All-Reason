@@ -46,7 +46,7 @@ if gadgetHandler:IsSyncedCode() then
         obs.completed[ud.name]=(obs.completed[ud.name] or 0)+1
         if ud.isFactory and idle(u) then factories[#factories+1]=u
         elseif ud.isBuilder and idle(u) then builders[#builders+1]=u
-        elseif not ud.isBuilder and not ud.isBuilding and ud.canAttack then army[#army+1]=u end
+        elseif not ud.isBuilder and not ud.isBuilding and not ud.canFly and ud.canAttack then army[#army+1]=u end
       end
     end
     table.sort(builders);table.sort(factories);table.sort(army)
@@ -68,7 +68,7 @@ if gadgetHandler:IsSyncedCode() then
       end
     end
     local function add(id,description,list) orders[id]=list;obs.candidates[#obs.candidates+1]={id=id,description=description} end
-    for _,spec in ipairs({{'energy','armsolar'},{'factory','armvp'},{'defense','armllt'},{'radar','armrad'}}) do
+    for _,spec in ipairs({{'energy','armsolar'},{'factory','armvp'},{'air_factory','armap'},{'defense','armllt'},{'anti_air','armrl'},{'radar','armrad'}}) do
       local d=UnitDefNames[spec[2]] and UnitDefNames[spec[2]].id
       if d then for _,u in ipairs(builders) do if allowed(u,d) then
         local x,_,z=pos(u);local p=buildsite(d,x,z)
@@ -91,10 +91,13 @@ if gadgetHandler:IsSyncedCode() then
       end
     end end
     if best then add('expand_metal','Build metal extractor at nearest available deposit',{best}) end
-    for _,spec in ipairs({{'tank','armstump'},{'scout','armfav'},{'constructor','armcv'}}) do
-      local d=UnitDefNames[spec[2]].id
+    for _,spec in ipairs({{'tank','armstump'},{'scout','armfav'},{'constructor','armcv'},
+        {'air_scout','armpeep','Unarmed air scout'},{'fighter','armfig','Fighter: attacks aircraft only'},
+        {'bomber','armthund','Bomber: attacks ground targets'},{'air_constructor','armca','Flying constructor'},
+        {'anti_air','armsam','Mobile anti-air missile vehicle'}}) do
+      local d=UnitDefNames[spec[2]] and UnitDefNames[spec[2]].id
       for _,u in ipairs(factories) do if allowed(u,d) then
-        add('produce_'..spec[1],'Produce '..spec[2],{{u=u,cmd=-d,p={}}});break
+        add('produce_'..spec[1],spec[3] or ('Produce '..spec[2]),{{u=u,cmd=-d,p={}}});break
       end end
     end
     if #army>0 then
@@ -107,9 +110,9 @@ if gadgetHandler:IsSyncedCode() then
         retreat[#retreat+1]={u=army[i],cmd=CMD.MOVE,p={x,y,z}}
         scout[#scout+1]={u=army[i],cmd=CMD.FIGHT,p={Game.mapSizeX/2,Spring.GetGroundHeight(Game.mapSizeX/2,Game.mapSizeZ/2),Game.mapSizeZ/2}}
       end
-      add('attack','Attack visible enemy or explore opposite start area',attack)
-      add('retreat','Return army to own start area',retreat)
-      add('scout_center','Move army toward center',scout)
+      add('attack','Ground army: attack visible enemy or explore opposite start area',attack)
+      add('retreat','Ground army: return to own start area',retreat)
+      add('scout_center','Ground army: move toward center',scout)
     end
     tactics.enrich(obs,orders)
     if tostring(opts.llm_direct)=='1' then direct.enrich(obs,spots) end
@@ -121,6 +124,17 @@ if gadgetHandler:IsSyncedCode() then
     if f==1 then
       Spring.SetGameRulesParam('ainame_0','Cloud GLM')
       Spring.SetGameRulesParam('ainame_1','Local Qwen')
+      if tostring(opts.llm_airfixture)=='1' then
+        for team=0,1 do
+          local x,_,z=Spring.GetTeamStartPosition(team)
+          for i,name in ipairs({'armap','armvp','armcv','armstump','armfig','armthund','armpeep','armca'}) do
+            assert(UnitDefNames[name],'Missing air fixture definition: '..name)
+            local px=x+(team==0 and 1 or -1)*350;local pz=z+(i-4)*180
+            assert(Spring.CreateUnit(name,px,Spring.GetGroundHeight(px,pz),pz,0,team),'Air fixture spawn failed: '..name)
+          end
+        end
+        Spring.Echo('LLMDUEL AIR FIXTURE: not a normal LLM match')
+      end
       if tostring(opts.llm_fixture)=='1' then
         for team=0,1 do
           local x,_,z=Spring.GetTeamStartPosition(team)
@@ -154,7 +168,19 @@ if gadgetHandler:IsSyncedCode() then
     end
     if ended or f%30~=0 then return end
     for team=0,1 do
-      local obs=observation(team)
+      local obs,orders=observation(team)
+      if f==30 and tostring(opts.llm_airfixture)=='1' then
+        for _,name in ipairs({'build_air_factory','build_anti_air','produce_fighter','produce_bomber','produce_air_scout','produce_air_constructor','produce_anti_air','air_scout_north','air_defend_base','air_retreat','attack'}) do
+          assert(orders[name] and #orders[name]>0,'Missing air candidate: '..name)
+        end
+        for _,o in ipairs(orders.attack) do assert(not UnitDefs[Spring.GetUnitDefID(o.u)].canFly,'Ground order includes aircraft') end
+        for _,o in ipairs(orders.air_retreat) do
+          local d=UnitDefs[Spring.GetUnitDefID(o.u)]
+          assert(d.canFly and not d.isBuilder,'Air order includes ground unit or constructor')
+        end
+        assert(obs.force.fighters>=1 and obs.force.bombers>=1 and obs.force.air_scouts>=1,'Aircraft counts missing')
+        Spring.Echo('LLMDUEL AIR CHECK PASSED team '..team)
+      end
       SendToUnsynced('llm_snapshot',json.encode(obs))
     end
   end

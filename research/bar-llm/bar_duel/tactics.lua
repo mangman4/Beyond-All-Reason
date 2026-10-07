@@ -10,7 +10,8 @@ function M.enrich(obs,orders)
   local ally=select(6,Spring.GetTeamInfo(team,false))
   local bx,by,bz=Spring.GetTeamStartPosition(team)
   local army,builders,damaged,mexes={},{},{},{}
-  obs.jobs={};obs.force={count=0,health_percent=100,idle=0,tasks={}}
+  local aircraft,fighters,bombers,scouts={},{},{},{}
+  obs.jobs={};obs.force={count=0,ground=0,air=0,fighters=0,bombers=0,air_scouts=0,health_percent=100,idle=0,tasks={}}
   obs.production={factories=0,idle_factories=0,builders=0,idle_builders=0}
   local hp,maxhp=0,0
   for _,u in ipairs(Spring.GetTeamUnits(team)) do
@@ -28,8 +29,14 @@ function M.enrich(obs,orders)
     elseif d.isBuilder and progress>=1 then
       obs.production.builders=obs.production.builders+1
       if queue==0 then builders[#builders+1]=u;obs.production.idle_builders=obs.production.idle_builders+1 end
-    elseif not d.isBuilding and d.canAttack and progress>=1 then
-      army[#army+1]=u;hp=hp+h;maxhp=maxhp+m
+    elseif not d.isBuilding and (d.canAttack or d.name=='armpeep') and progress>=1 then
+      if d.canFly then
+        aircraft[#aircraft+1]=u
+        if d.name=='armfig' then fighters[#fighters+1]=u
+        elseif d.name=='armthund' then bombers[#bombers+1]=u
+        elseif d.name=='armpeep' then scouts[#scouts+1]=u end
+      else army[#army+1]=u end
+      hp=hp+h;maxhp=maxhp+m
       local task=command==CMD.FIGHT and 'fight' or command==CMD.MOVE and 'move' or command==CMD.ATTACK and 'attack' or 'other'
       if queue==0 then task='idle';obs.force.idle=obs.force.idle+1 end
       obs.force.tasks[task]=(obs.force.tasks[task] or 0)+1
@@ -38,15 +45,22 @@ function M.enrich(obs,orders)
     if d.extractsMetal>0 then mexes[#mexes+1]={x=x,y=y,z=z} end
   end
   table.sort(army);table.sort(builders);table.sort(damaged,function(a,b)return a.h<b.h end)
-  obs.force.count=#army;if maxhp>0 then obs.force.health_percent=math.floor(hp/maxhp*100) end
+  for _,group in ipairs({aircraft,fighters,bombers,scouts}) do table.sort(group) end
+  obs.force.ground=#army;obs.force.air=#aircraft
+  obs.force.fighters=#fighters;obs.force.bombers=#bombers;obs.force.air_scouts=#scouts
+  obs.force.count=#army+#aircraft;obs.army=obs.force.count
+  if maxhp>0 then obs.force.health_percent=math.floor(hp/maxhp*100) end
   obs.resources.metal_net=rounded((obs.resources.metal_income or 0)-(obs.resources.metal_spend or 0))
   obs.resources.energy_net=rounded((obs.resources.energy_income or 0)-(obs.resources.energy_spend or 0))
   for _,r in ipairs({'metal','energy'}) do
     local net=obs.resources[r..'_net']
     if net<0 then obs.resources[r..'_depletes_in_seconds']=rounded(obs.resources[r]/-net) end
   end
-  local current={};obs.threat={base_visible_enemies=0,expansion_visible_enemies=0}
+  local current={};obs.threat={base_visible_enemies=0,expansion_visible_enemies=0,visible_air=0,visible_ground=0}
   for _,e in ipairs(obs.enemies) do
+    local def=UnitDefNames[e.type]
+    local key=def and def.canFly and 'visible_air' or 'visible_ground'
+    obs.threat[key]=obs.threat[key]+1
     if e.id then current[e.id]=true;seen[team][e.id]={id=e.id,type=e.type,x=e.x,z=e.z,last_seen_frame=f} end
     if distance(e.x,e.z,bx,bz)<1000^2 then obs.threat.base_visible_enemies=obs.threat.base_visible_enemies+1 end
     for _,m in ipairs(mexes) do if distance(e.x,e.z,m.x,m.z)<700^2 then obs.threat.expansion_visible_enemies=obs.threat.expansion_visible_enemies+1;break end end
@@ -66,6 +80,27 @@ function M.enrich(obs,orders)
     if #list>0 then add(id,description,list,{x=math.floor(x),z=math.floor(z)}) end
   end
   -- Targets are ONLY selected from the current team's already-filtered observation.
+  local airTarget,groundTarget
+  for _,e in ipairs(obs.enemies) do
+    local d=UnitDefNames[e.type]
+    if d and d.canFly then airTarget=airTarget or e
+    else groundTarget=groundTarget or e end
+  end
+  if airTarget and #fighters>0 then
+    local list={}
+    for i=1,math.min(60,#fighters) do list[#list+1]={u=fighters[i],cmd=CMD.ATTACK,p={airTarget.id}} end
+    add('air_intercept','Fighters: intercept currently visible aircraft',list)
+  end
+  if groundTarget and #bombers>0 then
+    local list={}
+    for i=1,math.min(60,#bombers) do list[#list+1]={u=bombers[i],cmd=CMD.ATTACK,p={groundTarget.id}} end
+    add('air_bomb','Bombers: attack currently visible ground target',list)
+  end
+  move('air_defend_base','Fighters: defend own start area',bx,bz,CMD.FIGHT,fighters)
+  move('air_scout_north','Air scouts: explore northern central lane',Game.mapSizeX/2,Game.mapSizeZ*.25,CMD.MOVE,scouts)
+  move('air_scout_south','Air scouts: explore southern central lane',Game.mapSizeX/2,Game.mapSizeZ*.75,CMD.MOVE,scouts)
+  move('air_scout_enemy','Air scouts: explore opposite start area',Game.mapSizeX-bx,Game.mapSizeZ-bz,CMD.MOVE,scouts)
+  move('air_retreat','Aircraft: return to own start area; constructors keep working',bx,bz,CMD.MOVE,aircraft)
   local targets={}
   for _,e in ipairs(obs.enemies) do
     local d=UnitDefNames[e.type]

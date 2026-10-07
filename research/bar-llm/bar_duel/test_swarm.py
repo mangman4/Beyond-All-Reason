@@ -6,6 +6,13 @@ from swarm import SwarmController,owner
 import network
 
 class SwarmTests(unittest.TestCase):
+    def test_air_production_role_can_propose_and_coordinate(self):
+        obs={**self.obs,'candidates':[{'id':x} for x in ('wait','build_energy','build_air_factory','produce_fighter','build_anti_air','air_intercept')]}
+        infer,calls=self.fake(dict(economy='build_energy',production='build_air_factory',combat='air_intercept',coordinator='build_air_factory'))
+        choice,_=SwarmController(infer,'test').decide(obs)
+        self.assertEqual(choice['action_id'],'build_air_factory')
+        self.assertEqual({c['id'] for c in calls[1][1]['candidates']},{'wait','build_air_factory','produce_fighter'})
+        self.assertEqual({c['id'] for c in calls[2][1]['candidates']},{'wait','build_anti_air','air_intercept'})
     obs={'frame':30,'team':1,'resources':{'metal':100,'energy':100},'candidates':[{'id':x} for x in ('wait','build_energy','build_factory','attack')]}
     def fake(self,actions,fail=()):
         calls=[]

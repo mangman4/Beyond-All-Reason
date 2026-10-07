@@ -159,13 +159,14 @@ def main():
     p.add_argument('--control',choices=('macro','direct','assisted'),default='macro')
     p.add_argument('--victory-test',type=int,choices=(0,1),help='TEST ONLY: eliminate selected team commander at frame 900')
     p.add_argument('--fixture',action='store_true',help='TEST ONLY: symmetric starting factory and army')
+    p.add_argument('--air-fixture',action='store_true',help='TEST ONLY: symmetric aircraft and split-order validation')
     p.add_argument('--probe',action='store_true',help='TEST ONLY: exercise rejected commands')
     p.add_argument('--seconds',type=int,default=1800,help='Wall clock cap; no decision-count termination')
     p.add_argument('--swap',action='store_true')
     p.add_argument('--port',type=int,default=18765)
     p.add_argument('--dashboard-port',type=int,default=8766)
     args=p.parse_args()
-    if (args.fixture or args.probe or args.victory_test is not None) and not args.dry_run:p.error('fixture/probe/victory-test require --dry-run')
+    if (args.fixture or args.air_fixture or args.probe or args.victory_test is not None) and not args.dry_run:p.error('fixture/air-fixture/probe/victory-test require --dry-run')
     if args.seconds<=0:p.error('seconds must be positive')
     for port in (args.port,args.dashboard_port,18452):
         with socket.socket() as test:
@@ -201,13 +202,15 @@ def main():
     if args.control=='direct':script=script.replace('llm_duel=1;','llm_duel=1;llm_direct=1;')
     if args.control=='assisted':script=script.replace('llm_duel=1;','llm_duel=1;llm_assisted=1;')
     if args.fixture:script=script.replace('llm_duel=1;','llm_duel=1;llm_fixture=1;')
+    if args.air_fixture:script=script.replace('llm_duel=1;','llm_duel=1;llm_airfixture=1;')
     if args.victory_test is not None:script=script.replace('llm_duel=1;',f'llm_duel=1;llm_victorytest={args.victory_test};')
     (run/'script.txt').write_text(script,encoding='utf-8')
     (run/'engine.cfg').write_text('LuaSocketEnabled = 1\nTCPAllowListen = 127.0.0.1:'+str(args.port)+'\nTCPAllowConnect = 127.0.0.1:'+str(args.port)+'\nSpringData = '+str(args.data)+'\nFullscreen = 0\nXResolutionWindowed = 1280\nYResolutionWindowed = 720\nVSync = 1\n',encoding='utf-8')
     manifest={'game':basegame,'engine':engine.parent.name,'map':'Red Comet Remake 1.8','models':models,
               'probe_requests':(6 if args.control=='direct' else 3) if args.probe else 0,'dry_run':args.dry_run,'fixture':args.fixture,'probe':args.probe,'swap':args.swap,'max_seconds':args.seconds,'memory':False,'observation_memory_seconds':120,'swarm':bool(swarm),
               'local_mode':args.local_mode,'collaboration':{'roles':['economy','production','combat'],'execution':'sequential','arbitration':'same local LLM, one proposed action or wait','cycle_deadline_seconds':45,'role_deadline_seconds':12,'max_calls_per_cycle':4} if swarm else None,
-              'action_interface':{'direct':'direct-v1','macro':'macro-v2','assisted':'assisted-v1'}[args.control],'visibility':'current LOS + own last sightings (120s TTL)','deadline_seconds':45,
+              'air_fixture':args.air_fixture,
+              'action_interface':{'direct':'direct-v1','macro':'macro-v3-air','assisted':'assisted-v2-air'}[args.control],'visibility':'current LOS + own last sightings (120s TTL)','deadline_seconds':45,
               'victory_test':args.victory_test,'deathmode':'com','source_hash':hashlib.sha256(b''.join((ROOT/n).read_bytes() for n in ('run.py','network.py','duel.lua','tactics.lua','bridge_widget.lua','swarm.py','direct.py','direct.lua','assisted.py'))).hexdigest(),
               'random_seed':'engine-generated; not fixed','initial_resources':{'metal':1000,'energy':1000},'unit_cap':300}
     if swarm:
@@ -351,6 +354,10 @@ def main():
                         def mock(o):
                             if args.control=='direct':return direct.fixture_choice(o)
                             ids=[c['id'] for c in o['candidates']];units=o['units']
+                            if args.air_fixture:
+                                actions=['produce_fighter','produce_anti_air','air_scout_north','air_defend_base','air_retreat','build_anti_air','build_air_factory','produce_bomber','produce_air_scout','produce_air_constructor']
+                                action=actions[(o['frame']//90)%len(actions)]
+                                return {'action_id':action if action in ids else 'wait','reason_code':'production'},{}
                             order=['expand_metal','build_energy','build_factory','produce_constructor','produce_tank','attack','wait']
                             if units.get('armmex',0)>=2:order.remove('expand_metal')
                             if units.get('armsolar',0)>=3:order.remove('build_energy')
