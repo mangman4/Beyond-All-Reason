@@ -34,6 +34,14 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(view['recent_changes']['metal_change'],-20)
         self.assertNotIn('error',view['recent_actions'][0])
         self.assertNotIn('recent_actions',current)
+    def test_different_speed_schedules_cannot_be_aggregated(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as d:
+            a=self.make_run(d,'normal','time_limit');b=self.make_run(d,'fast','time_limit')
+            for path,multiplier in ((a,1),(b,4)):
+                p=path/'manifest.json';manifest=json.loads(p.read_text(encoding='utf-8'))
+                manifest['speed_schedule']=[{'frame':0,'speed':multiplier}]
+                p.write_text(json.dumps(manifest),encoding='utf-8')
+            with self.assertRaises(ValueError):write_reports([a,b],Path(d)/'mixed')
     def test_percentile(self):
         self.assertEqual(percentile(list(range(1,101)),.95),95)
         self.assertIsNone(percentile([],.95))

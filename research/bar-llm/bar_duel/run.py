@@ -11,13 +11,14 @@ import subprocess
 import threading
 import time
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 import network
 import hashlib
 import copy
 import queue
 import direct
 import assisted
+import speed
 from analysis import write_reports
 
 ROOT = Path(__file__).resolve().parent
@@ -133,7 +134,7 @@ def start_script(port, swap=False):
         teams.append(f'[TEAM{t}]{{TeamLeader=0;AllyTeam={t};Side=Armada;RGBColor={"0.2 0.9 0.7" if t==0 else "0.95 0.45 0.6"};StartPosX={x};StartPosZ=2048;}}')
         teams.append(f'[ALLYTEAM{t}]{{NumAllies=0;}}')
         teams.append(f'[AI{t}]{{Name={"Cloud GLM" if t==0 else "Local Qwen"};ShortName={"LLMCloud" if t==0 else "LLMLocal"};Team={t};Host=0;IsFromDemo=0;}}')
-    return '[GAME]{MapName=Red Comet Remake 1.8;GameType=BAR LLM Duel 0.1;HostIP=127.0.0.1;HostPort=18452;IsHost=1;MyPlayerName=ResearchObserver;StartPosType=3;GameStartDelay=1;NumPlayers=1;NumUsers=3;\n[PLAYER0]{Name=ResearchObserver;Spectator=1;Team=0;}\n'+ '\n'.join(teams)+f'\n[MODOPTIONS]{{llm_duel=1;llm_port={port};deathmode=com;startmetal=1000;startenergy=1000;maxunits=300;}}}}'
+    return '[GAME]{MapName=Red Comet Remake 1.8;GameType=BAR LLM Duel 0.1;HostIP=127.0.0.1;HostPort=18452;IsHost=1;MyPlayerName=ResearchObserver;StartPosType=3;GameStartDelay=1;MinSpeed=1;MaxSpeed=4;NumPlayers=1;NumUsers=3;\n[PLAYER0]{Name=ResearchObserver;Spectator=1;Team=0;}\n'+ '\n'.join(teams)+f'\n[MODOPTIONS]{{llm_duel=1;llm_port={port};deathmode=com;startmetal=1000;startenergy=1000;maxunits=300;}}}}'
 
 def summarize(agents):
     return [{k:a.get(k,0) for k in ('model','decisions','model_calls','role_errors','errors','timeouts','input_tokens','output_tokens','latency_sum','accepted','rejected')} for a in agents]
@@ -211,7 +212,7 @@ def main():
               'local_mode':args.local_mode,'collaboration':{'roles':['economy','production','combat'],'execution':'sequential','arbitration':'same local LLM, one proposed action or wait','cycle_deadline_seconds':45,'role_deadline_seconds':12,'max_calls_per_cycle':4} if swarm else None,
               'air_fixture':args.air_fixture,
               'action_interface':{'direct':'direct-v1','macro':'macro-v3-air','assisted':'assisted-v2-air'}[args.control],'visibility':'current LOS + own last sightings (120s TTL)','deadline_seconds':45,
-              'victory_test':args.victory_test,'deathmode':'com','source_hash':hashlib.sha256(b''.join((ROOT/n).read_bytes() for n in ('run.py','network.py','duel.lua','tactics.lua','bridge_widget.lua','swarm.py','direct.py','direct.lua','assisted.py'))).hexdigest(),
+              'victory_test':args.victory_test,'deathmode':'com','source_hash':hashlib.sha256(b''.join((ROOT/n).read_bytes() for n in ('run.py','network.py','duel.lua','tactics.lua','bridge_widget.lua','swarm.py','direct.py','direct.lua','assisted.py','speed.py'))).hexdigest(),
               'random_seed':'engine-generated; not fixed','initial_resources':{'metal':1000,'energy':1000},'unit_cap':300}
     if swarm:
         from importlib.metadata import version
@@ -220,15 +221,10 @@ def main():
     state={'status':'starting','dry_run':args.dry_run,'local_mode':args.local_mode,'control':args.control,'agents':[{'model':m,'history':[],'status':'waiting','model_calls':0,'role_errors':0,
         'decisions':0,'errors':0,'timeouts':0,'input_tokens':0,'output_tokens':0,'latency_sum':0,'accepted':0,'rejected':0} for m in models]}
     lock=threading.Lock()
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path=='/state':
-                with lock: data=json.dumps(state,ensure_ascii=False).encode()
-                typ='application/json'
-            elif self.path=='/':data=(ROOT/'dashboard.html').read_bytes();typ='text/html; charset=utf-8'
-            else:self.send_error(404);return
-            self.send_response(200);self.send_header('Content-Type',typ);self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(data)
-        def log_message(self,*a):pass
+    speed_control=speed.SpeedControl();state['speed']=speed_control.state
+    manifest['speed_schedule']=[]
+    (run/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+    Handler=speed.handler(state,lock,speed_control,ROOT/'dashboard.html',args.dashboard_port)
     http=ThreadingHTTPServer(('127.0.0.1',args.dashboard_port),Handler)
     threading.Thread(target=http.serve_forever,daemon=True).start()
     log=(run/'events.jsonl').open('a',encoding='utf-8')
@@ -270,6 +266,12 @@ def main():
                     if now-started>300:raise RuntimeError('BAR bridge did not start; inspect engine-output.txt')
                     time.sleep(.2);continue
             try:
+                with lock:
+                    speed_control.expire(now)
+                    speed_command=speed_control.dispatch(now)
+                if speed_command:
+                    sock.sendall(('LLMSPEED:%d:%d\n'%(speed_command['request'],speed_command['speed'])).encode())
+                    event({'speed_request':True,**speed_command})
                 part=sock.recv(65536)
                 if not part:raise RuntimeError('BAR bridge disconnected')
                 last_packet=now
@@ -277,6 +279,14 @@ def main():
             except socket.timeout:pass
             while b'\n' in buffer:
                 line,buffer=buffer.split(b'\n',1);v=json.loads(line)
+                if v.get('speed_status'):
+                    with lock:speed_control.observe(v)
+                    event(v)
+                    schedule=manifest['speed_schedule']
+                    if not schedule or schedule[-1]['speed']!=v['requested']:
+                        schedule.append({'frame':v['frame'] if schedule else 0,'speed':v['requested']})
+                        (run/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+                    continue
                 if v.get('gameover'):event({'sample':True,'observations':latest});state.update(status='finished',result=v);event(v);return
                 if v.get('ack'):
                     if args.probe and v['request']<=(6 if args.control=='direct' else 3):
